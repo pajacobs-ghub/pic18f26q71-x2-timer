@@ -1,0 +1,29 @@
+Pin allocations for PIC18F46Q71-I/P x2-timer-ng-build-3
+PJ 2024-07-01
+
+                PIC18F46Q71-I/P
+                +------v------+
+MCLR#         1 | RE3     RB7 | 40       ICSPDAT
+C1IN0-(ANa)   2 | RA0     RB6 | 39       ICSPCLK
+(NC)          3 | RA1     RB5 | 38         OUT7b
+(NC)          4 | RA2     RB4 | 37         OUT7a
+(NC)          5 | RA3     RB3 | 36         OUT6b
+(NC)          6 | RA4     RB2 | 35         OUT6a
+(NC)          7 | RA5     RB1 | 34   C2IN3-(ANb)
+LED_PWR       8 | RE0     RB0 | 33          (NC)
+LED_ARMa      9 | RE1     VDD | 32           +5V
+LED_ARMb     10 | RE2     RB6 | 31           GND
++5V          11 | VDD     RD7 | 30         OUT5b
+GND          12 | VSS     RD6 | 29         OUT5a
+(NC)         13 | RA7     RD5 | 28         OUT4b
+(NC)         14 | RA6     RD4 | 27         OUT4a
+TX1          15 | RC0     RC7 | 26           RX1
+RTS1         16 | RC1     RC6 | 25          CTS1
+OUT0a        17 | RC2     RC5 | 24         OUT3b
+OUT0b        18 | RC3     RC4 | 23         OUT3a
+OUT1a        19 | RD0     RD3 | 22         OUT2b
+OUT1b        20 | RD1     RD2 | 21         OUT2a
+                +-------------+
+
+Notes: 
+
