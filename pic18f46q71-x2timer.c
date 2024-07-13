@@ -4,7 +4,7 @@
 // PJ, 2024-07-11 Start with the command interpreter.
 //     2024-07-13 Virtual registers and DACs plus ADC.
 //
-#define VERSION_STR "v0.3 PIC18F46Q71 X2-timer-ng build-3 2024-07-13"
+#define VERSION_STR "v0.4 PIC18F46Q71 X2-timer-ng build-3 2024-07-14"
 //
 // PIC18F46Q71 Configuration Bit Settings (generated in Memory View)
 // CONFIG1
@@ -75,6 +75,22 @@
 #include <string.h>
 
 #define LED LATEbits.LATE0
+#define OUT0a LATCbits.LATC2
+#define OUT0b LATCbits.LATC3
+#define OUT1a LATDbits.LATD0
+#define OUT1b LATDbits.LATD1
+#define OUT2a LATDbits.LATD2
+#define OUT2b LATDbits.LATD3
+#define OUT3a LATCbits.LATC4
+#define OUT3b LATCbits.LATC5
+#define OUT4a LATDbits.LATD4
+#define OUT4b LATDbits.LATD5
+#define OUT5a LATDbits.LATD6
+#define OUT5b LATDbits.LATD7
+#define OUT6a LATBbits.LATB2
+#define OUT6b LATBbits.LATB3
+#define OUT7a LATBbits.LATB4
+#define OUT7b LATBbits.LATB5
 
 // Parameters controlling the device are stored in virtual registers.
 #define NUMREG 7
@@ -121,9 +137,25 @@ void init_pins()
     ANSELAbits.ANSELA0 = 1;
     TRISBbits.TRISB1 = 1;
     ANSELBbits.ANSELB1 = 1;
+    // Digital output signals.
+    // Set their default level low until a peripheral drives them.
+    OUT1a = 0; TRISDbits.TRISD0 = 0;
+    OUT1b = 0; TRISDbits.TRISD1 = 0;
+    OUT2a = 0; TRISDbits.TRISD2 = 0;
+    OUT2b = 0; TRISDbits.TRISD3 = 0;
+    OUT3b = 0; TRISCbits.TRISC4 = 0;
+    OUT3b = 0; TRISCbits.TRISC5 = 0;
+    OUT4a = 0; TRISDbits.TRISD4 = 0;
+    OUT4b = 0; TRISDbits.TRISD5 = 0;
+    OUT5a = 0; TRISDbits.TRISD6 = 0;
+    OUT5b = 0; TRISDbits.TRISD7 = 0;
+    OUT6a = 0; TRISBbits.TRISB2 = 0;
+    OUT6b = 0; TRISBbits.TRISB3 = 0;
+    OUT7a = 0; TRISBbits.TRISB4 = 0;
+    OUT7b = 0; TRISBbits.TRISB7 = 0;
 }
 
-void FVR_init()
+void update_FVRs()
 {
     // We want to both the ADC and the DAC references set the same.
     uint8_t vref = vregister[3] & 0x03;
@@ -172,7 +204,7 @@ void ADC_init()
     return;
 }
 
-int16_t ADC_read(uint8_t i)
+uint16_t ADC_read(uint8_t i)
 {
     // Returns the value from the ADC.
     ADPCH = i;
@@ -180,7 +212,7 @@ int16_t ADC_read(uint8_t i)
     NOP();
     while (ADCON0bits.GO) { /* wait, should be brief */ }
     PIR1bits.ADIF = 0;
-    return (int16_t)ADRES;
+    return ADRES;
 }
 
 void ADC_close()
@@ -189,16 +221,161 @@ void ADC_close()
     return;
 }
 
-void trigger_simple()
+uint8_t trigger_simple()
 {
-    // FIXME
-    return;
+    // Returns:
+    // 0 if successfully set up,
+    // 1 if the comparator is already high.
+    //
+    update_FVRs();
+    update_DACs();
+    // Connect INa through comparator 1.
+    // Our external signal goes into the inverting input of the comparator,
+    // so we need to invert the polarity to get trigger on positive slope
+    // of the external signal.
+    CM1NCH = 0b000; // C1IN0- pin
+    CM1PCH = 0b100; // DAC2_Output
+    CM1CON0bits.POL = 1;
+    CM1CON0bits.HYS = 0; // no hysteresis
+    CM1CON0bits.SYNC = 0; // async output
+    CM1CON0bits.EN = 1;
+    // The signal out of the comparator should transition 0 to 1
+    // as the external trigger voltage crosses the specified level.
+    __delay_ms(1);
+    if (CMOUTbits.MC1OUT) {
+        // Fail early because the comparator is already triggered.
+        return 1;
+    }
+    // The use of two CLCs gets us access to all ports for the output pins.
+    // Table 23-2 in data sheet states that:
+    //   CLC1 can reach ports A,C
+    //   CLC3 can reach ports B,D
+    //
+    // Follow the set-up description in Section 24.6 of data sheet.
+    CLCSELECT = 0b00; // To select CLC1 registers for the following settings.
+    CLCnCONbits.EN = 0; // Disable while setting up.
+    // Data select from outside world
+    CLCnSEL0 = 0x20; // data1 gets CMP1_OUT as input (table 24.2)
+    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
+    CLCnSEL2 = 0; // data3 as for data2
+    CLCnSEL3 = 0; // data4 as for data2
+    // Logic select into gates
+    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
+    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
+    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
+    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
+    // Gate output polarities
+    CLCnPOLbits.G1POL = 0;
+    CLCnPOLbits.G2POL = 0;
+    CLCnPOLbits.G3POL = 0;
+    CLCnPOLbits.G4POL = 0;
+    // Logic function is S-R latch
+    CLCnCONbits.MODE = 0b011;
+    // Do not invert output.
+    CLCnPOLbits.POL = 0;
+    //
+    CLCSELECT = 0b10; // To select CLC3 registers for the following settings.
+    CLCnCONbits.EN = 0; // Disable while setting up.
+    // Data select from outside world
+    CLCnSEL0 = 0x20; // data1 gets CMP1_OUT as input (table 24.2)
+    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
+    CLCnSEL2 = 0; // data3 as for data2
+    CLCnSEL3 = 0; // data4 as for data2
+    // Logic select into gates
+    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
+    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
+    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
+    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
+    // Gate output polarities
+    CLCnPOLbits.G1POL = 0;
+    CLCnPOLbits.G2POL = 0;
+    CLCnPOLbits.G3POL = 0;
+    CLCnPOLbits.G4POL = 0;
+    // Logic function is S-R latch
+    CLCnCONbits.MODE = 0b011;
+    // Do not invert output.
+    CLCnPOLbits.POL = 0;
+    //
+    // Some out the outputs may be delayed so set up timers.
+    uint16_t delay0 = (uint16_t)vregister[4];
+    uint16_t delay1 = (uint16_t)vregister[5];
+    uint16_t delay2 = (uint16_t)vregister[6];
+    //
+    if (delay0) {
+        // OUT0 is delayed; use universal timer A
+        // [TODO]
+        // Use CLC output to turn timer on.
+    }
+    if (delay1) {
+        // OUT1 is delayed; use universal timer B
+        // [TODO]
+        // Use CLC output to turn timer on.
+    }
+    //
+    // Connect the output of CLCs to the relevant output pins.
+    GIE = 0; // We run without interrupt.
+    PPSLOCK = 0x55;
+    PPSLOCK = 0xaa;
+    PPSLOCKED = 0;
+    // Table 23-2 in data sheet.
+    // CLC1 can reach ports A,C
+    // CLC3 can reach ports B,D
+    if (delay0 == 0) {
+        RC2PPS = 0x01; // OUT0a from CLC1
+        RC3PPS = 0x01; // OUT0b
+    } else {
+        RC2PPS = 0x23; // OUT0a from TU16A
+        RC3PPS = 0x23; // OUT0b
+    }
+    if (delay1 == 0) {
+        RD0PPS = 0x03; // OUT1a from CLC3
+        RD1PPS = 0x03; // OUT1b
+    } else {
+        RD0PPS = 0x24; // OUT1a from TU16B
+        RD1PPS = 0x24; // OUT1b
+    }
+    RD2PPS = 0x03; // OUT2a
+    RD3PPS = 0x03; // OUT2b
+    RC4PPS = 0x01; // OUT3a
+    RC5PPS = 0x01; // OUT3b
+    RD4PPS = 0x03; // OUT4a
+    RD5PPS = 0x03; // OUT4b
+    RD6PPS = 0x03; // OUT5a
+    RD7PPS = 0x03; // OUT5b
+    RB2PPS = 0x03; // OUT6a
+    RB3PPS = 0x03; // OUT6b
+    RB4PPS = 0x03; // OUT7a
+    RB5PPS = 0x03; // OUT7b
+    PPSLOCK = 0x55;
+    PPSLOCK = 0xaa;
+    PPSLOCKED = 1;
+    //
+    // Now that the S-R latches are set up, enable them.
+    CLCSELECT = 0b00; // To select CLC1.
+    CLCnCONbits.EN = 1;
+    CLCSELECT = 0b10; // To select CLC3.
+    CLCnCONbits.EN = 1;
+    //
+    // Wait until the event and then clean up.
+    while (!CMOUTbits.MC1OUT) { CLRWDT(); }
+    // Once the comparator has triggered, we expect that
+    // all interesting activity is over is a short while.
+    __delay_ms(100);
+    // Cleanup and disable peripherals.
+    CLCSELECT = 0b00; // To select CLC1.
+    CLCnCONbits.EN = 0;
+    CLCSELECT = 0b10; // To select CLC3.
+    CLCnCONbits.EN = 0;
+    // [TODO] disable timers
+    CM1CON0bits.EN = 0;
+    //
+    return 0; // Success is presumed.
 }
 
-void trigger_TOF()
+uint8_t trigger_TOF()
 {
     // FIXME
-    return;
+    return 0;
 }
 
 void arm_and_wait_for_event(void)
@@ -206,25 +383,23 @@ void arm_and_wait_for_event(void)
     int nchar;
     switch (vregister[0]) {
         case 0:
-            putstr("armed simple trigger, using INa only. ");
-            if (CMOUTbits.MC1OUT) {
-                putstr("C1OUT already high. fail");
-                break;
+            putstr("Armed simple trigger, using INa only: ");
+            if (trigger_simple()) {
+                putstr("C1OUT already high. fail\n");
+            } else {
+                putstr("triggered. ok\n");
             }
-            trigger_simple();
-            putstr("triggered. ok\n");
             break;
         case 1:
-            putstr("armed time-of-flight trigger, using INa followed by INb. ");
-            if (CMOUTbits.MC1OUT) {
-                putstr("C1OUT already high. fail");
-                break;
+            putstr("Armed time-of-flight trigger, using INa followed by INb: ");
+            if (trigger_TOF()) {
+                putstr("C1OUT already high. fail\n");
+            } else {
+                putstr("triggered. ok\n");
             }
-            trigger_TOF();
-            putstr("triggered. ok\n");
             break;
         default:
-            putstr("unknown mode. fail\n");
+            putstr("Unknown mode. fail\n");
     }
 }
 
@@ -298,7 +473,7 @@ void interpret_command(char* cmdStr)
                         vregister[i] = v;
                         nchar = snprintf(bufB, NBUFB, "reg[%u] %d ok\n", i, v);
                         puts(bufB);
-                        if (i == 3) { FVR_init(); }
+                        if (i == 3) { update_FVRs(); }
                         if (i == 1 || i == 2) { update_DACs(); }
                     } else {
                         putstr("fail\n");
@@ -338,7 +513,7 @@ void interpret_command(char* cmdStr)
                 // Found some nonblank text, assume channel number.
                 i = (uint8_t) atoi(token_ptr);
                 if (i == 0 || i == 9 || i == 57 || i == 58) {
-                    v = ADC_read(i);
+                    v = (int16_t)ADC_read(i);
                     nchar = snprintf(bufB, NBUFB, "%d ok\n", v);
                     putstr(bufB);
                 } else {
@@ -364,7 +539,7 @@ void interpret_command(char* cmdStr)
             putstr(" F      set register values to original values\n");
             putstr(" a      arm device and wait for event\n");
             // Get ADC Positive Input Channel Selections from Table 41-7 in the data sheet
-            putstr(" c <i>  convert analogue channel i\n");
+            putstr(" c <i>  convert analogue channel i (12-bit result, 0-4095)\n");
             putstr("        i=57 DAC2_output (INa)\n");
             putstr("        i=58 DAC3_output (INb)\n");
             putstr("        i=0  RA0/C1IN0- (INa)\n");
@@ -396,7 +571,7 @@ int main(void)
     uart1_init(115200);
     restore_registers_from_EEPROM();
     __delay_ms(10);
-    FVR_init();
+    update_FVRs();
     update_DACs();
     ADC_init();
     __delay_ms(10);
