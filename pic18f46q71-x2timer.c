@@ -3,8 +3,9 @@
 //
 // PJ, 2024-07-11 Start with the command interpreter.
 //     2024-07-13 Virtual registers and DACs plus ADC.
+//     2024-07-14 Simple trigger implemented.
 //
-#define VERSION_STR "v0.4 PIC18F46Q71 X2-timer-ng build-3 2024-07-14"
+#define VERSION_STR "v0.5 PIC18F46Q71 X2-timer-ng build-3 2024-07-14"
 //
 // PIC18F46Q71 Configuration Bit Settings (generated in Memory View)
 // CONFIG1
@@ -95,12 +96,16 @@
 // Parameters controlling the device are stored in virtual registers.
 #define NUMREG 7
 int16_t vregister[NUMREG]; // working copy in SRAM
+const char* hints[NUMREG] = { "mode",
+  "level-a", "level-b", "Vref",
+  "delay-0", "delay-1", "delay-2"
+}; 
 
 void set_registers_to_original_values()
 {
     vregister[0] = 0;   // mode 0=simple trigger from INa, 1=time-of-flight(TOF) trigger)
     vregister[1] = 5;   // trigger level INa as a 8-bit count, 0-255
-    vregister[2] = 5;   // trigger level INb as a 10-bit count, 0-255
+    vregister[2] = 5;   // trigger level INb as a 8-bit count, 0-255
     vregister[3] = 3;   // Vref selection for DAC 0=off, 1=1v024, 2=2v048, 3=4v096
     vregister[4] = 0;   // delay 0 as a 16-bit count
     vregister[5] = 0;   // delay 1
@@ -436,7 +441,8 @@ void interpret_command(char* cmdStr)
             nchar = snprintf(bufB, NBUFB, "Register values:\n");
             putstr(bufB);
             for (i=0; i < NUMREG; ++i) {
-                nchar = snprintf(bufB, NBUFB, "reg[%d]=%d\n", i, vregister[i]);
+                nchar = snprintf(bufB, NBUFB, "reg[%d]=%d (%s)\n",
+                        i, vregister[i], hints[i]);
                 putstr(bufB);
             }
             putstr("ok\n");
@@ -449,7 +455,7 @@ void interpret_command(char* cmdStr)
                 i = (uint8_t) atoi(token_ptr);
                 if (i < NUMREG) {
                     v = vregister[i];
-                    nchar = snprintf(bufB, NBUFB, "%d ok\n", v);
+                    nchar = snprintf(bufB, NBUFB, "%d (%s) ok\n", v, hints[i]);
                     putstr(bufB);
                 } else {
                     putstr("fail\n");
@@ -471,7 +477,7 @@ void interpret_command(char* cmdStr)
                         // Assume text is value for register.
                         v = (int16_t) atoi(token_ptr);
                         vregister[i] = v;
-                        nchar = snprintf(bufB, NBUFB, "reg[%u] %d ok\n", i, v);
+                        nchar = snprintf(bufB, NBUFB, "reg[%u] %d (%s) ok\n", i, v, hints[i]);
                         puts(bufB);
                         if (i == 3) { update_FVRs(); }
                         if (i == 1 || i == 2) { update_DACs(); }
