@@ -4,8 +4,9 @@
 // PJ, 2024-07-11 Start with the command interpreter.
 //     2024-07-13 Virtual registers and DACs plus ADC.
 //     2024-07-14 Simple trigger implemented.
+//     2024-07-15 Fixed delays implemented.
 //
-#define VERSION_STR "v0.5 PIC18F46Q71 X2-timer-ng build-3 2024-07-14"
+#define VERSION_STR "v0.6 PIC18F46Q71 X2-timer-ng build-3 2024-07-15"
 //
 // PIC18F46Q71 Configuration Bit Settings (generated in Memory View)
 // CONFIG1
@@ -136,7 +137,7 @@ char restore_registers_from_EEPROM()
 
 void init_pins()
 {
-    TRISEbits.TRISE0 = 0; // Pin as output for LED.
+    LED = 0; TRISEbits.TRISE0 = 0; ANSELEbits.ANSELE0 = 0; // output for LED.
     // We have comparator input pins C1IN0-/RA0 and C2IN3-/RB1.
     TRISAbits.TRISA0 = 1;
     ANSELAbits.ANSELA0 = 1;
@@ -144,20 +145,22 @@ void init_pins()
     ANSELBbits.ANSELB1 = 1;
     // Digital output signals.
     // Set their default level low until a peripheral drives them.
-    OUT1a = 0; TRISDbits.TRISD0 = 0;
-    OUT1b = 0; TRISDbits.TRISD1 = 0;
-    OUT2a = 0; TRISDbits.TRISD2 = 0;
-    OUT2b = 0; TRISDbits.TRISD3 = 0;
-    OUT3b = 0; TRISCbits.TRISC4 = 0;
-    OUT3b = 0; TRISCbits.TRISC5 = 0;
-    OUT4a = 0; TRISDbits.TRISD4 = 0;
-    OUT4b = 0; TRISDbits.TRISD5 = 0;
-    OUT5a = 0; TRISDbits.TRISD6 = 0;
-    OUT5b = 0; TRISDbits.TRISD7 = 0;
-    OUT6a = 0; TRISBbits.TRISB2 = 0;
-    OUT6b = 0; TRISBbits.TRISB3 = 0;
-    OUT7a = 0; TRISBbits.TRISB4 = 0;
-    OUT7b = 0; TRISBbits.TRISB7 = 0;
+    OUT0b = 0; TRISCbits.TRISC2 = 0; ANSELCbits.ANSELC2 = 0;
+    OUT0b = 0; TRISCbits.TRISC3 = 0; ANSELCbits.ANSELC3 = 0;
+    OUT1a = 0; TRISDbits.TRISD0 = 0; ANSELDbits.ANSELD0 = 0;
+    OUT1b = 0; TRISDbits.TRISD1 = 0; ANSELDbits.ANSELD1 = 0;
+    OUT2a = 0; TRISDbits.TRISD2 = 0; ANSELDbits.ANSELD2 = 0;
+    OUT2b = 0; TRISDbits.TRISD3 = 0; ANSELDbits.ANSELD3 = 0;
+    OUT3b = 0; TRISCbits.TRISC4 = 0; ANSELCbits.ANSELC4 = 0;
+    OUT3b = 0; TRISCbits.TRISC5 = 0; ANSELCbits.ANSELC5 = 0;
+    OUT4a = 0; TRISDbits.TRISD4 = 0; ANSELDbits.ANSELD4 = 0;
+    OUT4b = 0; TRISDbits.TRISD5 = 0; ANSELDbits.ANSELD5 = 0;
+    OUT5a = 0; TRISDbits.TRISD6 = 0; ANSELDbits.ANSELD6 = 0;
+    OUT5b = 0; TRISDbits.TRISD7 = 0; ANSELDbits.ANSELD7 = 0;
+    OUT6a = 0; TRISBbits.TRISB2 = 0; ANSELBbits.ANSELB2 = 0;
+    OUT6b = 0; TRISBbits.TRISB3 = 0; ANSELBbits.ANSELB3 = 0;
+    OUT7a = 0; TRISBbits.TRISB4 = 0; ANSELBbits.ANSELB4 = 0;
+    OUT7b = 0; TRISBbits.TRISB5 = 0; ANSELBbits.ANSELB5 = 0;
 }
 
 void update_FVRs()
@@ -228,9 +231,14 @@ void ADC_close()
 
 uint8_t trigger_simple()
 {
+    // Set up comparator 1 to monitor the analog input INa
+    // and trigger on that voltage exceeding the specified level.
+    // Use CLCs to latch the comparator output and use timers
+    // to allow a couple of the output signals to be delayed.
+    //
     // Returns:
-    // 0 if successfully set up,
-    // 1 if the comparator is already high.
+    // 0 if successfully set up and the event passes,
+    // 1 if the comparator is already high at set-up time.
     //
     update_FVRs();
     update_DACs();
@@ -278,6 +286,8 @@ uint8_t trigger_simple()
     CLCnCONbits.MODE = 0b011;
     // Do not invert output.
     CLCnPOLbits.POL = 0;
+    // Finally, enable latch.
+    CLCnCONbits.EN = 1;
     //
     CLCSELECT = 0b10; // To select CLC3 registers for the following settings.
     CLCnCONbits.EN = 0; // Disable while setting up.
@@ -300,21 +310,99 @@ uint8_t trigger_simple()
     CLCnCONbits.MODE = 0b011;
     // Do not invert output.
     CLCnPOLbits.POL = 0;
+    // Finally, enable latch.
+    CLCnCONbits.EN = 1;
     //
     // Some out the outputs may be delayed so set up timers.
     uint16_t delay0 = (uint16_t)vregister[4];
     uint16_t delay1 = (uint16_t)vregister[5];
     uint16_t delay2 = (uint16_t)vregister[6];
     //
+    TUCHAINbits.CH16AB = 0; // independent counters
     if (delay0) {
-        // OUT0 is delayed; use universal timer A
-        // [TODO]
-        // Use CLC output to turn timer on.
+        // OUT0 is delayed; use universal timer A started by CLC1_OUT.
+        TU16ACON0bits.ON = 0;
+        TU16ACLK = 0b00010; // FOSC
+        TU16APS = 7; // With FOSC=64MHz, we want 125ns ticks
+        TU16AHLTbits.CSYNC = 1;
+        TU16ACON1bits.OSEN = 1; // one shot
+        TU16ACON0bits.OM = 1; // level output
+        TU16AHLTbits.START = 0b10; // rising ERS edge
+        TU16AHLTbits.RESET = 0; // none
+        TU16AHLTbits.STOP = 0b11; // at PR match
+        TU16AERS = 0b01110; // CLC1_OUT
+        TU16APR = delay0 - 1;
+        TU16ACON1bits.CLR = 1; // clear count
+        // The timer output will be a pulse at PR match.
+        //
+        // Use CLC2 as an SR latch on this output.
+        CLCSELECT = 0b01; // To select CLC2 registers for the following settings.
+        CLCnCONbits.EN = 0; // Disable while setting up.
+        // Data select from outside world
+        CLCnSEL0 = 0x36; // data1 gets TU16A as input (table 24.2)
+        CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
+        CLCnSEL2 = 0; // data3 as for data2
+        CLCnSEL3 = 0; // data4 as for data2
+        // Logic select into gates
+        CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
+        CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
+        CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
+        CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
+        // Gate output polarities
+        CLCnPOLbits.G1POL = 0;
+        CLCnPOLbits.G2POL = 0;
+        CLCnPOLbits.G3POL = 0;
+        CLCnPOLbits.G4POL = 0;
+        // Logic function is S-R latch
+        CLCnCONbits.MODE = 0b011;
+        // Do not invert output.
+        CLCnPOLbits.POL = 0;
+        // Finally, enable timer and latch.
+        TU16ACON0bits.ON = 1;
+        CLCnCONbits.EN = 1;
     }
     if (delay1) {
-        // OUT1 is delayed; use universal timer B
-        // [TODO]
-        // Use CLC output to turn timer on.
+        // OUT1 is delayed; use universal timer B started by CLC1_OUT.
+        TU16BCON0bits.ON = 0;
+        TU16BCLK = 0b00010; // FOSC
+        TU16BPS = 7; // With FOSC=64MHz, we want 125ns ticks
+        TU16BHLTbits.CSYNC = 1;
+        TU16BCON1bits.OSEN = 1; // one shot
+        TU16BCON0bits.OM = 1; // level output
+        TU16BHLTbits.START = 0b10; // rising ERS edge
+        TU16BHLTbits.RESET = 0; // none
+        TU16BHLTbits.STOP = 0b11; // at PR match
+        TU16BERS = 0b01110; // CLC1_OUT
+        TU16BPR = delay1 - 1;
+        TU16BCON1bits.CLR = 1; // clear count
+        // The timer output will be a pulse at PR match.
+        //
+        // Use CLC4 as an SR latch on this output.
+        CLCSELECT = 0b11; // To select CLC4 registers for the following settings.
+        CLCnCONbits.EN = 0; // Disable while setting up.
+        // Data select from outside world
+        CLCnSEL0 = 0x37; // data1 gets TU16B as input (table 24.2)
+        CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
+        CLCnSEL2 = 0; // data3 as for data2
+        CLCnSEL3 = 0; // data4 as for data2
+        // Logic select into gates
+        CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
+        CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
+        CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
+        CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
+        // Gate output polarities
+        CLCnPOLbits.G1POL = 0;
+        CLCnPOLbits.G2POL = 0;
+        CLCnPOLbits.G3POL = 0;
+        CLCnPOLbits.G4POL = 0;
+        // Logic function is S-R latch
+        CLCnCONbits.MODE = 0b011;
+        // Do not invert output.
+        CLCnPOLbits.POL = 0;
+        //
+        // Finally, enable timer and latch.
+        TU16BCON0bits.ON = 1;
+        CLCnCONbits.EN = 1;
     }
     //
     // Connect the output of CLCs to the relevant output pins.
@@ -329,15 +417,15 @@ uint8_t trigger_simple()
         RC2PPS = 0x01; // OUT0a from CLC1
         RC3PPS = 0x01; // OUT0b
     } else {
-        RC2PPS = 0x23; // OUT0a from TU16A
-        RC3PPS = 0x23; // OUT0b
+        RC2PPS = 0x02; // OUT0a from TU16A latched by CLC2
+        RC3PPS = 0x02; // OUT0b
     }
     if (delay1 == 0) {
         RD0PPS = 0x03; // OUT1a from CLC3
         RD1PPS = 0x03; // OUT1b
     } else {
-        RD0PPS = 0x24; // OUT1a from TU16B
-        RD1PPS = 0x24; // OUT1b
+        RD0PPS = 0x04; // OUT1a from TU16B latched by CLC4
+        RD1PPS = 0x04; // OUT1b
     }
     RD2PPS = 0x03; // OUT2a
     RD3PPS = 0x03; // OUT2b
@@ -355,7 +443,7 @@ uint8_t trigger_simple()
     PPSLOCK = 0xaa;
     PPSLOCKED = 1;
     //
-    // Now that the S-R latches are set up, enable them.
+    // Now that we are set up, enable the S-R latches on the comparator.
     CLCSELECT = 0b00; // To select CLC1.
     CLCnCONbits.EN = 1;
     CLCSELECT = 0b10; // To select CLC3.
@@ -363,19 +451,46 @@ uint8_t trigger_simple()
     //
     // Wait until the event and then clean up.
     while (!CMOUTbits.MC1OUT) { CLRWDT(); }
-    // Once the comparator has triggered, we expect that
-    // all interesting activity is over is a short while.
+    while (!CLCDATAbits.CLC1OUT) { CLRWDT(); }
+    while (!CLCDATAbits.CLC3OUT) { CLRWDT(); }
+    while (!PORTCbits.RC4) { CLRWDT(); }  // OUT3 on CLC1
+    while (!PORTDbits.RD4) { CLRWDT(); }  // OUT4 on CLC3
+    // The delayed outputs may happen later, so wait for those, too.
+    while (!PORTCbits.RC2) { CLRWDT(); }  // OUT0
+    while (!PORTDbits.RD0) { CLRWDT(); }  // OUT1
+    //
+    // After the event, keep the outputs high for a short while
+    // and then clean up.
     __delay_ms(100);
+    //
+    // Redirect the output pins to their latches (which are all low).
+    GIE = 0; // We run without interrupt.
+    PPSLOCK = 0x55;
+    PPSLOCK = 0xaa;
+    PPSLOCKED = 0;
+    RC2PPS = 0x00; RC3PPS = 0x00; // OUT0
+    RD0PPS = 0x00; RD1PPS = 0x00; // OUT1
+    RD2PPS = 0x00; RD3PPS = 0x00; // OUT2
+    RC4PPS = 0x00; RC5PPS = 0x00; // OUT3
+    RD4PPS = 0x00; RD5PPS = 0x00; // OUT4
+    RD6PPS = 0x00; RD7PPS = 0x00; // OUT5
+    RB2PPS = 0x00; RB3PPS = 0x00; // OUT6
+    RB4PPS = 0x00; RB5PPS = 0x00; // OUT7b
+    PPSLOCK = 0x55;
+    PPSLOCK = 0xaa;
+    PPSLOCKED = 1;
+    //
     // Cleanup and disable peripherals.
-    CLCSELECT = 0b00; // To select CLC1.
-    CLCnCONbits.EN = 0;
-    CLCSELECT = 0b10; // To select CLC3.
-    CLCnCONbits.EN = 0;
-    // [TODO] disable timers
+    for (uint8_t i=0; i < 4; i++) {
+        CLCSELECT = i;
+        CLCnCONbits.EN = 0;
+    }
+    TU16ACON0bits.ON = 0;
+    TU16BCON0bits.ON = 0;
     CM1CON0bits.EN = 0;
     //
-    return 0; // Success is presumed.
-}
+    return 0; // Success is presumed at this point.
+} // end trigger_simple()
 
 uint8_t trigger_TOF()
 {
