@@ -145,13 +145,13 @@ void init_pins()
     ANSELBbits.ANSELB1 = 1;
     // Digital output signals.
     // Set their default level low until a peripheral drives them.
-    OUT0b = 0; TRISCbits.TRISC2 = 0; ANSELCbits.ANSELC2 = 0;
+    OUT0a = 0; TRISCbits.TRISC2 = 0; ANSELCbits.ANSELC2 = 0;
     OUT0b = 0; TRISCbits.TRISC3 = 0; ANSELCbits.ANSELC3 = 0;
     OUT1a = 0; TRISDbits.TRISD0 = 0; ANSELDbits.ANSELD0 = 0;
     OUT1b = 0; TRISDbits.TRISD1 = 0; ANSELDbits.ANSELD1 = 0;
     OUT2a = 0; TRISDbits.TRISD2 = 0; ANSELDbits.ANSELD2 = 0;
     OUT2b = 0; TRISDbits.TRISD3 = 0; ANSELDbits.ANSELD3 = 0;
-    OUT3b = 0; TRISCbits.TRISC4 = 0; ANSELCbits.ANSELC4 = 0;
+    OUT3a = 0; TRISCbits.TRISC4 = 0; ANSELCbits.ANSELC4 = 0;
     OUT3b = 0; TRISCbits.TRISC5 = 0; ANSELCbits.ANSELC5 = 0;
     OUT4a = 0; TRISDbits.TRISD4 = 0; ANSELDbits.ANSELD4 = 0;
     OUT4b = 0; TRISDbits.TRISD5 = 0; ANSELDbits.ANSELD5 = 0;
@@ -239,6 +239,8 @@ uint8_t trigger_simple()
     // Returns:
     // 0 if successfully set up and the event passes,
     // 1 if the comparator is already high at set-up time.
+    // 2 the delay timer TU16A started prematurely
+    // 3 the delay timer TU16B started prematurely
     //
     update_FVRs();
     update_DACs();
@@ -325,8 +327,8 @@ uint8_t trigger_simple()
         TU16ACLK = 0b00010; // FOSC
         TU16APS = 7; // With FOSC=64MHz, we want 125ns ticks
         TU16AHLTbits.CSYNC = 1;
-        TU16ACON1bits.OSEN = 1; // one shot
-        TU16ACON0bits.OM = 1; // level output
+        TU16ACON1bits.OSEN = 0; // not one shot
+        TU16ACON0bits.OM = 0; // pulse mode output
         TU16AHLTbits.START = 0b10; // rising ERS edge
         TU16AHLTbits.RESET = 0; // none
         TU16AHLTbits.STOP = 0b11; // at PR match
@@ -358,8 +360,12 @@ uint8_t trigger_simple()
         // Do not invert output.
         CLCnPOLbits.POL = 0;
         // Finally, enable timer and latch.
-        TU16ACON0bits.ON = 1;
         CLCnCONbits.EN = 1;
+        TU16ACON0bits.ON = 1;
+        if (TU16ACON1bits.RUN) {
+            // Fail early because the counter has started prematurely.
+            return 2;
+        }
     }
     if (delay1) {
         // OUT1 is delayed; use universal timer B started by CLC1_OUT.
@@ -367,8 +373,8 @@ uint8_t trigger_simple()
         TU16BCLK = 0b00010; // FOSC
         TU16BPS = 7; // With FOSC=64MHz, we want 125ns ticks
         TU16BHLTbits.CSYNC = 1;
-        TU16BCON1bits.OSEN = 1; // one shot
-        TU16BCON0bits.OM = 1; // level output
+        TU16BCON1bits.OSEN = 0; // not one shot
+        TU16BCON0bits.OM = 0; // pulse mode output
         TU16BHLTbits.START = 0b10; // rising ERS edge
         TU16BHLTbits.RESET = 0; // none
         TU16BHLTbits.STOP = 0b11; // at PR match
@@ -401,8 +407,12 @@ uint8_t trigger_simple()
         CLCnPOLbits.POL = 0;
         //
         // Finally, enable timer and latch.
-        TU16BCON0bits.ON = 1;
         CLCnCONbits.EN = 1;
+        TU16BCON0bits.ON = 1;
+        if (TU16BCON1bits.RUN) {
+            // Fail early because the counter has started prematurely.
+            return 3;
+        }
     }
     //
     // Connect the output of CLCs to the relevant output pins.
@@ -504,10 +514,17 @@ void arm_and_wait_for_event(void)
     switch (vregister[0]) {
         case 0:
             putstr("Armed simple trigger, using INa only: ");
-            if (trigger_simple()) {
+            uint8_t flag = trigger_simple();
+            if (flag == 1) {
                 putstr("C1OUT already high. fail\n");
-            } else {
+            } else if (flag == 2) {
+                putstr("delay timer TU16A started too soon. fail\n");
+            } else if (flag == 3) {
+                putstr("delay timer TU16A started too soon. fail\n");
+            } else if (flag == 0) {
                 putstr("triggered. ok\n");
+            } else {
+                putstr("unknown flag value. fail\n");
             }
             break;
         case 1:
