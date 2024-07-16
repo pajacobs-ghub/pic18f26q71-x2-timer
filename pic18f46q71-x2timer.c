@@ -5,8 +5,9 @@
 //     2024-07-13 Virtual registers and DACs plus ADC.
 //     2024-07-14 Simple trigger implemented.
 //     2024-07-15 Fixed delays implemented.
+//     2024-07-16 Add third delay to simple trigger.
 //
-#define VERSION_STR "v0.6 PIC18F46Q71 X2-timer-ng build-3 2024-07-15"
+#define VERSION_STR "v0.7 PIC18F46Q71 X2-timer-ng build-3 2024-07-16"
 //
 // PIC18F46Q71 Configuration Bit Settings (generated in Memory View)
 // CONFIG1
@@ -241,6 +242,7 @@ uint8_t trigger_simple()
     // 1 if the comparator is already high at set-up time.
     // 2 the delay timer TU16A started prematurely
     // 3 the delay timer TU16B started prematurely
+    // 4 the delay time TMR1/CCP1 is high too soon
     //
     update_FVRs();
     update_DACs();
@@ -362,6 +364,7 @@ uint8_t trigger_simple()
         // Finally, enable timer and latch.
         CLCnCONbits.EN = 1;
         TU16ACON0bits.ON = 1;
+        __delay_ms(1);
         if (TU16ACON1bits.RUN) {
             // Fail early because the counter has started prematurely.
             return 2;
@@ -409,9 +412,36 @@ uint8_t trigger_simple()
         // Finally, enable timer and latch.
         CLCnCONbits.EN = 1;
         TU16BCON0bits.ON = 1;
+        __delay_ms(1);
         if (TU16BCON1bits.RUN) {
             // Fail early because the counter has started prematurely.
             return 3;
+        }
+    }
+    if (delay2) {
+        // OUT2 is delayed; use Timer1 gated by CLC1_OUT.
+        T1CONbits.ON = 0;
+        T1CLKbits.CS = 0b00001; // FOSC/4
+        T1CONbits.CKPS = 0b01; // prescale 1:2 to get 125ns ticks
+        T1CONbits.RD16 = 1;
+        T1GATEbits.GSS = 0b10010; // CLC1_OUT
+        T1GCONbits.GPOL = 1; // timer gate is active high
+        T1GCONbits.GE = 1; // count controlled with gate input
+        PIR3bits.TMR1IF = 0;
+        PIR3bits.TMR1GIF = 0;
+        TMR1 = 0;
+        //
+        CCP1CONbits.MODE = 0b1000; // want to set output on compare
+        PIR3bits.CCP1IF = 0; // clear after changing mode
+        CCPR1 = delay2;
+        CCP1CONbits.EN = 0; // clear the output
+        NOP(); NOP();
+        CCP1CONbits.EN = 1;
+        T1CONbits.ON = 1; // enable count
+        __delay_ms(1);
+        if (CCP1CONbits.OUT) {
+            // Fail early because the TMR1/CCP1 is already showing high.
+            return 4;
         }
     }
     //
@@ -437,8 +467,13 @@ uint8_t trigger_simple()
         RD0PPS = 0x04; // OUT1a from TU16B latched by CLC4
         RD1PPS = 0x04; // OUT1b
     }
-    RD2PPS = 0x03; // OUT2a
-    RD3PPS = 0x03; // OUT2b
+    if (delay2 == 0) {
+        RD2PPS = 0x03; // OUT2a
+        RD3PPS = 0x03; // OUT2b
+    } else {
+        RD2PPS = 0x0D; // OUT2a from CCP1 (and TMR1)
+        RD3PPS = 0x0D; // OUT2b
+    }
     RC4PPS = 0x01; // OUT3a
     RC5PPS = 0x01; // OUT3b
     RD4PPS = 0x03; // OUT4a
@@ -468,6 +503,7 @@ uint8_t trigger_simple()
     // The delayed outputs may happen later, so wait for those, too.
     while (!PORTCbits.RC2) { CLRWDT(); }  // OUT0
     while (!PORTDbits.RD0) { CLRWDT(); }  // OUT1
+    while (!PORTDbits.RD2) { CLRWDT(); }  // OUT2
     //
     // After the event, keep the outputs high for a short while
     // and then clean up.
@@ -518,9 +554,11 @@ void arm_and_wait_for_event(void)
             if (flag == 1) {
                 putstr("C1OUT already high. fail\n");
             } else if (flag == 2) {
-                putstr("delay timer TU16A started too soon. fail\n");
+                putstr("delay0 timer TU16A started too soon. fail\n");
             } else if (flag == 3) {
-                putstr("delay timer TU16A started too soon. fail\n");
+                putstr("delay1 timer TU16B started too soon. fail\n");
+            } else if (flag == 4) {
+                putstr("delay2 timer TMR1/CCP1 output set too soon. fail\n");
             } else if (flag == 0) {
                 putstr("triggered. ok\n");
             } else {
