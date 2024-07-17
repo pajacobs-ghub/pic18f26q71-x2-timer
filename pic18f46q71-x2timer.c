@@ -8,7 +8,7 @@
 //     2024-07-16 Add third delay to simple trigger and implement TOF trigger.
 //     2024-07-17 Refactor code for setting of latches.
 //
-#define VERSION_STR "v0.9 PIC18F46Q71 X2-timer-ng build-3 2024-07-17"
+#define VERSION_STR "v0.10 PIC18F46Q71 X2-timer-ng build-3 2024-07-17"
 //
 // PIC18F46Q71 Configuration Bit Settings (generated in Memory View)
 // CONFIG1
@@ -434,7 +434,8 @@ uint8_t trigger_simple()
     PPSLOCK = 0xaa;
     PPSLOCKED = 1;
     //
-    LED0 = 1; // Indicate that we are armed and waiting.
+    LED1 = 1; // Indicate that we are armed and waiting.
+    LED2 = 1; // Second LED indicator.
     //
     // Wait until the event and then clean up.
     while (!CMOUTbits.MC1OUT) { CLRWDT(); }
@@ -450,7 +451,8 @@ uint8_t trigger_simple()
     // After the event, keep the outputs high for a short while
     // and then clean up.
     __delay_ms(100);
-    LED0 = 0; // No longer armed and waiting.
+    LED1 = 0; // No longer armed and waiting.
+    LED2 = 0;
     //
     // Redirect the output pins to their latches (which are all low).
     GIE = 0; // We run without interrupt.
@@ -561,7 +563,7 @@ uint8_t trigger_TOF()
     PIR3bits.TMR1IF = 0;
     PIR3bits.TMR1GIF = 0;
     TMR1 = 0;
-    //
+    // By default CCPn looks at TMR1.
     CCP1CONbits.MODE = 0b0101; // want to capture the TMR1 value at Event2
     CCP1CAPbits.CTS = 0b0111; // CLC4_OUT
     PIR3bits.CCP1IF = 0; // clear after changing mode
@@ -578,21 +580,10 @@ uint8_t trigger_TOF()
     // Event3 will be generated after a delay following Event2
     // This delay is computed from the TOF period between Events 1 and 2.
     //
-    // Set up TMR3+CCP2 to start on Event2 and run the computed delay.
-    // This will be mostly set up here but the compare period will need
-    // to be set after Event2 actually occurs.
-    //
-    T3CONbits.ON = 0;
-    T3CLKbits.CS = 0b00001; // FOSC/4
-    T3CONbits.CKPS = 0b01; // prescale 1:2 to get 125ns ticks
-    T3CONbits.RD16 = 1;
-    T3GATEbits.GSS = 0b10101; // CLC4_OUT
-    T3GCONbits.GPOL = 1; // timer gate is active high
-    T3GCONbits.GE = 1; // count controlled with gate input
-    PIR4bits.TMR3IF = 0;
-    PIR4bits.TMR3GIF = 0;
-    TMR3 = 0;
-    T3CONbits.ON = 1; // enable count
+    // Set up CCP2 to look at Timer1 (default) and generate Event3
+    // on match with the Period register.
+    // Note that this compare value will need to be set after Event2 
+    // actually occurs.
     //
     CCP2CONbits.MODE = 0b1000; // want to set output on compare
     PIR8bits.CCP2IF = 0; // clear after changing mode
@@ -704,7 +695,8 @@ uint8_t trigger_TOF()
     PPSLOCK = 0xaa;
     PPSLOCKED = 1;
     //
-    LED0 = 1; // Indicate that we are armed and waiting.
+    LED1 = 1; // Indicate that we are armed and waiting.
+    LED2 = 1; // Second LED indicator.
     //
     // Event3 will be generated after a delay computed from 
     // the TOF between Events 1 and 2.
@@ -719,11 +711,9 @@ uint8_t trigger_TOF()
     CCPR2 = pr_value;
     NOP(); NOP();
     CCP2CONbits.EN = 1;
-    LED1 = 1;
     //
     // Wait until Event3.
     while (!CLCDATAbits.CLC5OUT) { CLRWDT(); }
-    LED1 = 0;
     // The delayed outputs may happen later, so wait for those, too.
     while (!PORTCbits.RC2) { CLRWDT(); }  // OUT0
     while (!PORTDbits.RD0) { CLRWDT(); }  // OUT1
@@ -765,7 +755,8 @@ uint8_t trigger_TOF()
     //
     // Some debug (but, maybe, we'll keep it)
     printf("tof=%u pr=%d ", tof, pr_value);
-    LED0 = 0; // No longer armed and waiting.
+    LED1 = 0; // No longer armed and waiting.
+    LED2 = 0;
     return 0;
 }
 
@@ -982,7 +973,6 @@ int main(void)
     int m;
     int n;
     init_pins();
-    LED0 = 0;
     uart1_init(115200);
     restore_registers_from_EEPROM();
     __delay_ms(10);
@@ -1003,6 +993,7 @@ int main(void)
     uart1_flush_rx();
     // We will operate the MCU as a slave, waiting for commands
     // and only responding then.
+    LED0 = 1;  // Indicate that we are running. 
     while (1) {
         // Characters are not echoed as they are typed.
         // Backspace deleting is allowed.
@@ -1016,5 +1007,6 @@ int main(void)
     FVR_close();
     uart1_flush_rx();
     uart1_close();
+    LED0 = 0;
     return 0; // Expect that the MCU will reset.
 } // end main
