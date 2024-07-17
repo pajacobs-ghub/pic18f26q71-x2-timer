@@ -6,8 +6,9 @@
 //     2024-07-14 Simple trigger implemented.
 //     2024-07-15 Fixed delays implemented.
 //     2024-07-16 Add third delay to simple trigger and implement TOF trigger.
+//     2024-07-17 Refactor code for setting of latches.
 //
-#define VERSION_STR "v0.8 PIC18F46Q71 X2-timer-ng build-3 2024-07-16"
+#define VERSION_STR "v0.9 PIC18F46Q71 X2-timer-ng build-3 2024-07-17"
 //
 // PIC18F46Q71 Configuration Bit Settings (generated in Memory View)
 // CONFIG1
@@ -77,7 +78,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#define LED LATEbits.LATE0
+#define LED0 LATEbits.LATE0
+#define LED1 LATEbits.LATE1
+#define LED2 LATEbits.LATE2
+
 #define OUT0a LATCbits.LATC2
 #define OUT0b LATCbits.LATC3
 #define OUT1a LATDbits.LATD0
@@ -138,7 +142,10 @@ char restore_registers_from_EEPROM()
 
 void init_pins()
 {
-    LED = 0; TRISEbits.TRISE0 = 0; ANSELEbits.ANSELE0 = 0; // output for LED.
+    // Outputs for LEDs and debugging
+    LED0 = 0; TRISEbits.TRISE0 = 0; ANSELEbits.ANSELE0 = 0;
+    LED1 = 0; TRISEbits.TRISE1 = 0; ANSELEbits.ANSELE1 = 0;
+    LED2 = 0; TRISEbits.TRISE2 = 0; ANSELEbits.ANSELE2 = 0;
     // We have comparator input pins C1IN0-/RA0 and C2IN3-/RB1.
     TRISAbits.TRISA0 = 1;
     ANSELAbits.ANSELA0 = 1;
@@ -230,6 +237,38 @@ void ADC_close()
     return;
 }
 
+void setup_CLCn_as_latch(uint8_t n, uint8_t source_S)
+{
+    // Follow the set-up description in Section 24.6 of data sheet.
+    // We program a source for S and none for R.
+    //
+    // Note that the CLC number is one larger than the value
+    // used in the select register.
+    CLCSELECT = n-1;
+    CLCnCONbits.EN = 0; // Disable while setting up.
+    // Data select from outside world
+    CLCnSEL0 = source_S; // data1 gets source_S as input (table 24.2)
+    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
+    CLCnSEL2 = 0; // data3 as for data2
+    CLCnSEL3 = 0; // data4 as for data2
+    // Logic select into gates
+    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
+    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
+    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
+    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
+    // Gate output polarities
+    CLCnPOLbits.G1POL = 0;
+    CLCnPOLbits.G2POL = 0;
+    CLCnPOLbits.G3POL = 0;
+    CLCnPOLbits.G4POL = 0;
+    // Logic function is S-R latch
+    CLCnCONbits.MODE = 0b011;
+    // Do not invert output.
+    CLCnPOLbits.POL = 0;
+    // Finally, enable latch.
+    CLCnCONbits.EN = 1;
+} // end setup_CLCn_as_latch()
+
 uint8_t trigger_simple()
 {
     // Set up comparator 1 to monitor the analog input INa
@@ -268,54 +307,8 @@ uint8_t trigger_simple()
     //   CLC1 can reach ports A,C
     //   CLC3 can reach ports B,D
     //
-    // Follow the set-up description in Section 24.6 of data sheet.
-    CLCSELECT = 0b000; // To select CLC1 registers for the following settings.
-    CLCnCONbits.EN = 0; // Disable while setting up.
-    // Data select from outside world
-    CLCnSEL0 = 0x20; // data1 gets CMP1_OUT as input (table 24.2)
-    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-    CLCnSEL2 = 0; // data3 as for data2
-    CLCnSEL3 = 0; // data4 as for data2
-    // Logic select into gates
-    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-    // Gate output polarities
-    CLCnPOLbits.G1POL = 0;
-    CLCnPOLbits.G2POL = 0;
-    CLCnPOLbits.G3POL = 0;
-    CLCnPOLbits.G4POL = 0;
-    // Logic function is S-R latch
-    CLCnCONbits.MODE = 0b011;
-    // Do not invert output.
-    CLCnPOLbits.POL = 0;
-    // Finally, enable latch.
-    CLCnCONbits.EN = 1;
-    //
-    CLCSELECT = 0b010; // To select CLC3 registers for the following settings.
-    CLCnCONbits.EN = 0; // Disable while setting up.
-    // Data select from outside world
-    CLCnSEL0 = 0x20; // data1 gets CMP1_OUT as input (table 24.2)
-    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-    CLCnSEL2 = 0; // data3 as for data2
-    CLCnSEL3 = 0; // data4 as for data2
-    // Logic select into gates
-    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-    // Gate output polarities
-    CLCnPOLbits.G1POL = 0;
-    CLCnPOLbits.G2POL = 0;
-    CLCnPOLbits.G3POL = 0;
-    CLCnPOLbits.G4POL = 0;
-    // Logic function is S-R latch
-    CLCnCONbits.MODE = 0b011;
-    // Do not invert output.
-    CLCnPOLbits.POL = 0;
-    // Finally, enable latch.
-    CLCnCONbits.EN = 1;
+    setup_CLCn_as_latch(1, 0x20); // CLC1 latches CMP1_OUT (table 24-2)
+    setup_CLCn_as_latch(3, 0x20); // CLC3 latches CMP1_OUT also
     //
     // Some out the outputs may be delayed so set up timers.
     uint16_t delay0 = (uint16_t)vregister[4];
@@ -338,31 +331,8 @@ uint8_t trigger_simple()
         TU16APR = delay0 - 1;
         TU16ACON1bits.CLR = 1; // clear count
         // The timer output will be a pulse at PR match.
-        //
         // Use CLC2 as an SR latch on this output.
-        CLCSELECT = 0b001; // To select CLC2 registers for the following settings.
-        CLCnCONbits.EN = 0; // Disable while setting up.
-        // Data select from outside world
-        CLCnSEL0 = 0x36; // data1 gets TU16A as input (table 24.2)
-        CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-        CLCnSEL2 = 0; // data3 as for data2
-        CLCnSEL3 = 0; // data4 as for data2
-        // Logic select into gates
-        CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-        CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-        CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-        CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-        // Gate output polarities
-        CLCnPOLbits.G1POL = 0;
-        CLCnPOLbits.G2POL = 0;
-        CLCnPOLbits.G3POL = 0;
-        CLCnPOLbits.G4POL = 0;
-        // Logic function is S-R latch
-        CLCnCONbits.MODE = 0b011;
-        // Do not invert output.
-        CLCnPOLbits.POL = 0;
-        // Finally, enable timer and latch.
-        CLCnCONbits.EN = 1;
+        setup_CLCn_as_latch(2, 0x36);
         TU16ACON0bits.ON = 1;
         __delay_ms(1);
         if (TU16ACON1bits.RUN) {
@@ -385,32 +355,8 @@ uint8_t trigger_simple()
         TU16BPR = delay1 - 1;
         TU16BCON1bits.CLR = 1; // clear count
         // The timer output will be a pulse at PR match.
-        //
         // Use CLC4 as an SR latch on this output.
-        CLCSELECT = 0b011; // To select CLC4 registers for the following settings.
-        CLCnCONbits.EN = 0; // Disable while setting up.
-        // Data select from outside world
-        CLCnSEL0 = 0x37; // data1 gets TU16B as input (table 24.2)
-        CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-        CLCnSEL2 = 0; // data3 as for data2
-        CLCnSEL3 = 0; // data4 as for data2
-        // Logic select into gates
-        CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-        CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-        CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-        CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-        // Gate output polarities
-        CLCnPOLbits.G1POL = 0;
-        CLCnPOLbits.G2POL = 0;
-        CLCnPOLbits.G3POL = 0;
-        CLCnPOLbits.G4POL = 0;
-        // Logic function is S-R latch
-        CLCnCONbits.MODE = 0b011;
-        // Do not invert output.
-        CLCnPOLbits.POL = 0;
-        //
-        // Finally, enable timer and latch.
-        CLCnCONbits.EN = 1;
+        setup_CLCn_as_latch(4, 0x37);
         TU16BCON0bits.ON = 1;
         __delay_ms(1);
         if (TU16BCON1bits.RUN) {
@@ -488,11 +434,7 @@ uint8_t trigger_simple()
     PPSLOCK = 0xaa;
     PPSLOCKED = 1;
     //
-    // Now that we are set up, enable the S-R latches on the comparator.
-    CLCSELECT = 0b000; // To select CLC1.
-    CLCnCONbits.EN = 1;
-    CLCSELECT = 0b010; // To select CLC3.
-    CLCnCONbits.EN = 1;
+    LED0 = 1; // Indicate that we are armed and waiting.
     //
     // Wait until the event and then clean up.
     while (!CMOUTbits.MC1OUT) { CLRWDT(); }
@@ -508,6 +450,7 @@ uint8_t trigger_simple()
     // After the event, keep the outputs high for a short while
     // and then clean up.
     __delay_ms(100);
+    LED0 = 0; // No longer armed and waiting.
     //
     // Redirect the output pins to their latches (which are all low).
     GIE = 0; // We run without interrupt.
@@ -579,37 +522,13 @@ uint8_t trigger_TOF()
         // Fail early because the comparator is already triggered.
         return 1;
     }
-    // For Event1, use a CLC for the output pins on PortB.
+    // For Event1, use CLC3 for the output pins on PortB.
     // Table 23-2 in data sheet states that:
     //   CLC1,2 can reach ports A,C
     //   CLC3,4 can reach ports B,D
     //   CLC5,6 can reach ports A,C
     //   CLC7,8 can reach ports B,D
-    //
-    // Follow the set-up description in Section 24.6 of data sheet.
-    CLCSELECT = 0b010; // To select CLC3 to latch Event1.
-    CLCnCONbits.EN = 0; // Disable while setting up.
-    // Data select from outside world
-    CLCnSEL0 = 0x20; // data1 gets CMP1_OUT as input (table 24.2)
-    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-    CLCnSEL2 = 0; // data3 as for data2
-    CLCnSEL3 = 0; // data4 as for data2
-    // Logic select into gates
-    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-    // Gate output polarities
-    CLCnPOLbits.G1POL = 0;
-    CLCnPOLbits.G2POL = 0;
-    CLCnPOLbits.G3POL = 0;
-    CLCnPOLbits.G4POL = 0;
-    // Logic function is S-R latch
-    CLCnCONbits.MODE = 0b011;
-    // Do not invert output.
-    CLCnPOLbits.POL = 0;
-    // Finally, enable latch.
-    CLCnCONbits.EN = 1;
+    setup_CLCn_as_latch(3, 0x20);
     //
     // Connect INb through comparator 2 to generate Event2.
     // Our external signal goes into the inverting input of the comparator,
@@ -628,29 +547,7 @@ uint8_t trigger_TOF()
         // Fail early because the comparator is already triggered.
         return 2;
     }
-    CLCSELECT = 0b011; // To select CLC4 to latch Event2.
-    CLCnCONbits.EN = 0; // Disable while setting up.
-    // Data select from outside world
-    CLCnSEL0 = 0x21; // data1 gets CMP2_OUT as input (table 24.2)
-    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-    CLCnSEL2 = 0; // data3 as for data2
-    CLCnSEL3 = 0; // data4 as for data2
-    // Logic select into gates
-    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-    // Gate output polarities
-    CLCnPOLbits.G1POL = 0;
-    CLCnPOLbits.G2POL = 0;
-    CLCnPOLbits.G3POL = 0;
-    CLCnPOLbits.G4POL = 0;
-    // Logic function is S-R latch
-    CLCnCONbits.MODE = 0b011;
-    // Do not invert output.
-    CLCnPOLbits.POL = 0;
-    // Finally, enable latch.
-    CLCnCONbits.EN = 1;
+    setup_CLCn_as_latch(4, 0x21); // CLC4 to latch CMP2_OUT for Event2.
     //
     // Set up TMR1+CCP1 to capture the TOF period, following Event1
     // up to Event2.
@@ -694,8 +591,8 @@ uint8_t trigger_TOF()
     T3GCONbits.GE = 1; // count controlled with gate input
     PIR4bits.TMR3IF = 0;
     PIR4bits.TMR3GIF = 0;
-    TMR1 = 0;
-    T2CONbits.ON = 1; // enable count
+    TMR3 = 0;
+    T3CONbits.ON = 1; // enable count
     //
     CCP2CONbits.MODE = 0b1000; // want to set output on compare
     PIR8bits.CCP2IF = 0; // clear after changing mode
@@ -709,54 +606,8 @@ uint8_t trigger_TOF()
     //
     // Latch the output of CCP2 with CLC5 and CLC7
     // so that we can feed IO pins on all of the ports.
-    //
-    CLCSELECT = 0b100; // To select CLC5 registers for the following settings.
-    CLCnCONbits.EN = 0; // Disable while setting up.
-    // Data select from outside world
-    CLCnSEL0 = 0x18; // data1 gets CCP2 as input (table 24.2)
-    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-    CLCnSEL2 = 0; // data3 as for data2
-    CLCnSEL3 = 0; // data4 as for data2
-    // Logic select into gates
-    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-    // Gate output polarities
-    CLCnPOLbits.G1POL = 0;
-    CLCnPOLbits.G2POL = 0;
-    CLCnPOLbits.G3POL = 0;
-    CLCnPOLbits.G4POL = 0;
-    // Logic function is S-R latch
-    CLCnCONbits.MODE = 0b011;
-    // Do not invert output.
-    CLCnPOLbits.POL = 0;
-    // Finally, enable latch.
-    CLCnCONbits.EN = 1;
-    //
-    CLCSELECT = 0b110; // To select CLC7 registers for the following settings.
-    CLCnCONbits.EN = 0; // Disable while setting up.
-    // Data select from outside world
-    CLCnSEL0 = 0x18; // data1 gets CCP2 as input (table 24.2)
-    CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-    CLCnSEL2 = 0; // data3 as for data2
-    CLCnSEL3 = 0; // data4 as for data2
-    // Logic select into gates
-    CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-    CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-    CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-    CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-    // Gate output polarities
-    CLCnPOLbits.G1POL = 0;
-    CLCnPOLbits.G2POL = 0;
-    CLCnPOLbits.G3POL = 0;
-    CLCnPOLbits.G4POL = 0;
-    // Logic function is S-R latch
-    CLCnCONbits.MODE = 0b011;
-    // Do not invert output.
-    CLCnPOLbits.POL = 0;
-    // Finally, enable latch.
-    CLCnCONbits.EN = 1;
+    setup_CLCn_as_latch(5, 0x18);
+    setup_CLCn_as_latch(7, 0x18);
     //
     // Some out the outputs may be delayed so set up timers.
     uint16_t delay0 = (uint16_t)vregister[4];
@@ -778,31 +629,8 @@ uint8_t trigger_TOF()
         TU16APR = delay0 - 1;
         TU16ACON1bits.CLR = 1; // clear count
         // The timer output will be a pulse at PR match.
-        //
-        // Use CLC1 as an SR latch on this output.
-        CLCSELECT = 0b000; // To select CLC1 registers for the following settings.
-        CLCnCONbits.EN = 0; // Disable while setting up.
-        // Data select from outside world
-        CLCnSEL0 = 0x36; // data1 gets TU16A as input (table 24.2)
-        CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-        CLCnSEL2 = 0; // data3 as for data2
-        CLCnSEL3 = 0; // data4 as for data2
-        // Logic select into gates
-        CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-        CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-        CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-        CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-        // Gate output polarities
-        CLCnPOLbits.G1POL = 0;
-        CLCnPOLbits.G2POL = 0;
-        CLCnPOLbits.G3POL = 0;
-        CLCnPOLbits.G4POL = 0;
-        // Logic function is S-R latch
-        CLCnCONbits.MODE = 0b011;
-        // Do not invert output.
-        CLCnPOLbits.POL = 0;
-        // Finally, enable timer and latch.
-        CLCnCONbits.EN = 1;
+        // Use CLC1 as an SR latch on TU16A output.
+        setup_CLCn_as_latch(1, 0x36);
         TU16ACON0bits.ON = 1;
         __delay_ms(1);
         if (TU16ACON1bits.RUN) {
@@ -825,32 +653,8 @@ uint8_t trigger_TOF()
         TU16BPR = delay1 - 1;
         TU16BCON1bits.CLR = 1; // clear count
         // The timer output will be a pulse at PR match.
-        //
         // Use CLC8 as an SR latch on this output.
-        CLCSELECT = 0b111; // To select CLC8 registers for the following settings.
-        CLCnCONbits.EN = 0; // Disable while setting up.
-        // Data select from outside world
-        CLCnSEL0 = 0x37; // data1 gets TU16B as input (table 24.2)
-        CLCnSEL1 = 0; // data2 gets CLCIN0PPS as input, but gets ignored in logic select
-        CLCnSEL2 = 0; // data3 as for data2
-        CLCnSEL3 = 0; // data4 as for data2
-        // Logic select into gates
-        CLCnGLS0 = 0b10; // data1 goes through true to gate 1 (S-R set)
-        CLCnGLS1 = 0; // gate 2 gets logic 0 (S-R set)
-        CLCnGLS2 = 0; // gate 3 gets logic 0 (S-R reset)
-        CLCnGLS3 = 0; // gate 4 gets logic 0 (S-R reset)
-        // Gate output polarities
-        CLCnPOLbits.G1POL = 0;
-        CLCnPOLbits.G2POL = 0;
-        CLCnPOLbits.G3POL = 0;
-        CLCnPOLbits.G4POL = 0;
-        // Logic function is S-R latch
-        CLCnCONbits.MODE = 0b011;
-        // Do not invert output.
-        CLCnPOLbits.POL = 0;
-        //
-        // Finally, enable timer and latch.
-        CLCnCONbits.EN = 1;
+        setup_CLCn_as_latch(8, 0x37);
         TU16BCON0bits.ON = 1;
         __delay_ms(1);
         if (TU16BCON1bits.RUN) {
@@ -900,6 +704,8 @@ uint8_t trigger_TOF()
     PPSLOCK = 0xaa;
     PPSLOCKED = 1;
     //
+    LED0 = 1; // Indicate that we are armed and waiting.
+    //
     // Event3 will be generated after a delay computed from 
     // the TOF between Events 1 and 2.
     uint16_t delay_extra = (uint16_t)vregister[6];
@@ -909,12 +715,15 @@ uint8_t trigger_TOF()
     NOP(); NOP();
     uint16_t tof = CCPR1;
     // For X2 AT4-AT7 sensors, set the delay to be 4.25 times the TOF period.
-    CCPR2 = (tof << 2) + (tof >> 2) + delay_extra;
+    uint16_t pr_value = (tof << 2) + (tof >> 2) + delay_extra;
+    CCPR2 = pr_value;
     NOP(); NOP();
     CCP2CONbits.EN = 1;
+    LED1 = 1;
     //
     // Wait until Event3.
     while (!CLCDATAbits.CLC5OUT) { CLRWDT(); }
+    LED1 = 0;
     // The delayed outputs may happen later, so wait for those, too.
     while (!PORTCbits.RC2) { CLRWDT(); }  // OUT0
     while (!PORTDbits.RD0) { CLRWDT(); }  // OUT1
@@ -954,6 +763,9 @@ uint8_t trigger_TOF()
     CM1CON0bits.EN = 0;
     CM2CON0bits.EN = 0;
     //
+    // Some debug (but, maybe, we'll keep it)
+    printf("tof=%u pr=%d ", tof, pr_value);
+    LED0 = 0; // No longer armed and waiting.
     return 0;
 }
 
@@ -1170,7 +982,7 @@ int main(void)
     int m;
     int n;
     init_pins();
-    LED = 0;
+    LED0 = 0;
     uart1_init(115200);
     restore_registers_from_EEPROM();
     __delay_ms(10);
@@ -1180,9 +992,9 @@ int main(void)
     __delay_ms(10);
     // Flash LED twice at start-up to indicate that the MCU is ready.
     for (int8_t i=0; i < 2; ++i) {
-        LED = 1;
+        LED0 = 1;
         __delay_ms(250);
-        LED = 0;
+        LED0 = 0;
         __delay_ms(250);
     }
     // Wait until we are reasonably sure that the MCU has restarted
